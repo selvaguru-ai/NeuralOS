@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { claudeClient } from './src/services/ai/index.ts';
+import { hasApiKey, getApiKey, setApiKey } from './src/storage/secureStore.ts';
 import {
   View,
   Text,
@@ -14,6 +16,26 @@ const App = () => {
   const [commandText, setCommandText] = useState('');
   const [currentTime, setCurrentTime] = useState('');
   const [currentDate, setCurrentDate] = useState('');
+  const [isReady, setIsReady] = useState(false);
+
+  useEffect(() => {
+    try {
+      const keyExists = hasApiKey();
+      console.log('[App] API key exists in MMKV:', keyExists);
+
+      if (keyExists) {
+        console.log('[App] Using existing key from MMKV');
+        claudeClient.initialize();
+        setIsReady(true);
+        console.log('[App] Claude client initialized successfully');
+      } else {
+        console.warn('[App] No API key found. User needs to set one in Settings.');
+        // TODO: Show onboarding screen or settings prompt
+      }
+    } catch (err) {
+      console.error('[App] Init failed:', err);
+    }
+  }, []);
 
   useEffect(() => {
     const updateTime = () => {
