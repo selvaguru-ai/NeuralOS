@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { claudeClient } from './src/services/ai/index.ts';
-import { hasApiKey, getApiKey, setApiKey } from './src/storage/secureStore.ts';
+import { claudeClient } from './src/services/ai';
+import { hasApiKey } from './src/storage/secureStore';
 import {
   View,
   Text,
