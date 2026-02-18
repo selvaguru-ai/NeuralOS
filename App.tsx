@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { claudeClient } from './src/services/ai';
 import { hasApiKey } from './src/storage/secureStore';
+import CommandScreen from './src/screens/CommandScreen';
 import {
   View,
   Text,
@@ -12,6 +13,7 @@ import {
 } from 'react-native';
 
 const App = () => {
+  const [currentScreen, setCurrentScreen] = useState<'home' | 'command'>('home');
   const [commandBarFocused, setCommandBarFocused] = useState(false);
   const [commandText, setCommandText] = useState('');
   const [currentTime, setCurrentTime] = useState('');
@@ -60,6 +62,12 @@ const App = () => {
     return () => clearInterval(interval);
   }, []);
 
+  // Show CommandScreen if active
+  if (currentScreen === 'command') {
+    return <CommandScreen onBack={() => setCurrentScreen('home')} />;
+  }
+
+  // Show HomeScreen
   return (
     <View style={styles.container}>
       <StatusBar
@@ -197,7 +205,7 @@ const App = () => {
             commandBarFocused && styles.commandBarFocused,
           ]}
           activeOpacity={1}
-          onPress={() => setCommandBarFocused(true)}
+          onPress={() => setCurrentScreen('command')}
         >
           <View style={styles.cmdDot} />
           {commandBarFocused ? (

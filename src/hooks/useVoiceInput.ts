@@ -17,12 +17,10 @@
 //     onFinalResult: (text) => sendToAI(text),
 //   });
 
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { speechRecognition, VoiceState, VoiceError } from '../services/voice/speechRecognition';
+import { useState, useCallback } from 'react';
+import type { VoiceState, VoiceError } from '../services/voice/speechRecognition';
 import {
   hapticMicTap,
-  hapticRecognized,
-  hapticError as hapticErrorFeedback,
 } from '../services/voice/voiceFeedback';
 
 interface UseVoiceInputOptions {
@@ -62,101 +60,36 @@ interface UseVoiceInputReturn {
 }
 
 export function useVoiceInput(options: UseVoiceInputOptions = {}): UseVoiceInputReturn {
-  const {
-    onFinalResult,
-    onPartialResult,
-    onError,
-    locale = 'en-US',
-    autoInit = true,
-  } = options;
-
-  const [voiceState, setVoiceState] = useState<VoiceState>('idle');
-  const [transcript, setTranscript] = useState('');
-  const [error, setError] = useState<VoiceError | null>(null);
-  const [isAvailable, setIsAvailable] = useState(false);
-
-  // Use refs for callbacks to avoid stale closures
-  const onFinalResultRef = useRef(onFinalResult);
-  const onPartialResultRef = useRef(onPartialResult);
-  const onErrorRef = useRef(onError);
-
-  onFinalResultRef.current = onFinalResult;
-  onPartialResultRef.current = onPartialResult;
-  onErrorRef.current = onError;
-
-  // ─── Initialize ────────────────────────────────────────
-
-  useEffect(() => {
-    if (!autoInit) return;
-
-    async function init() {
-      const available = await speechRecognition.checkAvailability();
-      setIsAvailable(available);
-
-      if (available) {
-        await speechRecognition.requestPermission();
-      }
-    }
-
-    // Register callbacks
-    speechRecognition.onPartialResult((text) => {
-      setTranscript(text);
-      onPartialResultRef.current?.(text);
-    });
-
-    speechRecognition.onFinalResult((text) => {
-      setTranscript(text);
-      hapticRecognized();
-      onFinalResultRef.current?.(text);
-    });
-
-    speechRecognition.onError((err) => {
-      setError(err);
-      hapticErrorFeedback();
-      onErrorRef.current?.(err);
-    });
-
-    speechRecognition.onStateChange((state) => {
-      setVoiceState(state);
-      if (state === 'idle') {
-        setError(null);
-      }
-    });
-
-    init();
-
-    // Cleanup on unmount
-    return () => {
-      speechRecognition.removeAllCallbacks();
-      // Don't destroy — other screens might use voice too
-    };
-  }, [autoInit]);
+  // STUB VERSION - Voice package removed
+  // This provides a non-functional interface so CommandScreen doesn't crash
+  const [voiceState] = useState<VoiceState>('idle');
+  const [transcript] = useState('');
+  const [error] = useState<VoiceError | null>({
+    code: 'not_available',
+    message: 'Voice input not available. Voice package was removed.',
+    suggestTyping: true,
+  });
+  const [isAvailable] = useState(false);
 
   // ─── Actions ───────────────────────────────────────────
 
   const startListening = useCallback(async () => {
-    setTranscript('');
-    setError(null);
     hapticMicTap();
-    await speechRecognition.start(locale);
-  }, [locale]);
+    // Voice package removed - no action
+    console.log('[useVoiceInput] Voice package not available');
+  }, []);
 
   const stopListening = useCallback(async () => {
-    await speechRecognition.stop();
+    // Voice package removed - no action
   }, []);
 
   const cancelListening = useCallback(async () => {
-    setTranscript('');
-    await speechRecognition.cancel();
+    // Voice package removed - no action
   }, []);
 
   const toggleListening = useCallback(async () => {
-    if (speechRecognition.isListening) {
-      await stopListening();
-    } else {
-      await startListening();
-    }
-  }, [startListening, stopListening]);
+    await startListening();
+  }, [startListening]);
 
   // ─── Return ────────────────────────────────────────────
 

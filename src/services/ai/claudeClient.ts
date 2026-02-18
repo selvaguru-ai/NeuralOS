@@ -1,32 +1,10 @@
 // src/services/ai/claudeClient.ts
-// NeuralOS Claude API Client
+// NeuralOS Claude API Client (React Native Compatible)
 //
-// Core wrapper around the Anthropic SDK with:
-// - Streaming responses (word-by-word)
-// - Sync responses (full text)
-// - Exponential backoff retry logic
-// - Structured error handling
-// - Token usage tracking
-// - Request cancellation via AbortController
-//
-// INSTALL:
-//   npm install @anthropic-ai/sdk
-//
-// USAGE:
-//   import { claudeClient } from './claudeClient';
-//
-//   // Initialize once (e.g., on app start after onboarding)
-//   claudeClient.initialize('sk-ant-...');
-//
-//   // Streaming (preferred for UI)
-//   for await (const chunk of claudeClient.stream('Turn on flashlight')) {
-//     updateUI(chunk.accumulated);
-//   }
-//
-//   // Sync (for intent classification, background tasks)
-//   const response = await claudeClient.send('What time is it?');
+// Uses direct fetch() with non-streaming API for React Native compatibility.
+// RN's Hermes engine doesn't reliably support ReadableStream / response.body.getReader(),
+// so we use the synchronous Messages API and simulate word-by-word streaming in the hook layer.
 
-import Anthropic from '@anthropic-ai/sdk';
 import { buildSystemPrompt } from './systemPrompt';
 import {
   getApiKey,
@@ -37,7 +15,6 @@ import {
 import type {
   ClaudeModel,
   AIRequestOptions,
-  AIResponse,
   AIError,
   StreamChunk,
   Message,
@@ -45,18 +22,20 @@ import type {
 
 // ─── Constants ─────────────────────────────────────────────
 
+const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
+const ANTHROPIC_VERSION = '2023-06-01';
 const MAX_RETRIES = 3;
-const BASE_RETRY_DELAY_MS = 1000; // 1s, 2s, 4s exponential backoff
-const DEFAULT_TIMEOUT_MS = 30_000; // 30 seconds
+const BASE_RETRY_DELAY_MS = 1000;
 
 // ─── Error Helpers ─────────────────────────────────────────
 
 function classifyError(error: unknown): AIError {
+  const raw = error instanceof Error ? error.message : String(error);
+
   if (error instanceof Error) {
-    const msg = error.message.toLowerCase();
+    const msg = raw.toLowerCase();
     const name = error.name || '';
 
-    // Aborted by user
     if (name === 'AbortError' || msg.includes('aborted')) {
       return {
         type: 'timeout',
@@ -66,24 +45,17 @@ function classifyError(error: unknown): AIError {
       };
     }
 
-    // Network errors
-    if (
-      msg.includes('network') ||
-      msg.includes('fetch') ||
-      msg.includes('econnrefused') ||
-      msg.includes('enotfound')
-    ) {
+    if (msg.includes('network') || msg.includes('failed to fetch') || msg.includes('type error')) {
       return {
         type: 'network',
-        message: "Can't reach the server. Check your connection and try again.",
+        message: "Can't reach the server. Check your connection.",
         retryable: true,
         retryAfterMs: 2000,
         originalError: error,
       };
     }
 
-    // Auth errors (401)
-    if (msg.includes('401') || msg.includes('unauthorized') || msg.includes('authentication')) {
+    if (msg.includes('http 401') || msg.includes('unauthorized') || msg.includes('invalid x-api-key')) {
       return {
         type: 'auth',
         message: 'API key is invalid or expired. Check your settings.',
@@ -92,112 +64,69 @@ function classifyError(error: unknown): AIError {
       };
     }
 
-    // Rate limit (429)
-    if (msg.includes('429') || msg.includes('rate limit') || msg.includes('too many')) {
-      // Try to extract retry-after header value
-      const retryMatch = msg.match(/retry.?after[:\s]*(\d+)/i);
-      const retryAfter = retryMatch ? parseInt(retryMatch[1], 10) * 1000 : 10_000;
+    if (msg.includes('http 429') || msg.includes('rate limit')) {
       return {
         type: 'rate_limit',
-        message: 'Too many requests. Waiting a moment before trying again.',
+        message: "Rate limited. Waiting before retrying.",
         retryable: true,
-        retryAfterMs: retryAfter,
+        retryAfterMs: 15_000,
         originalError: error,
       };
     }
 
-    // Server errors (500, 502, 503, 529)
-    if (
-      msg.includes('500') ||
-      msg.includes('502') ||
-      msg.includes('503') ||
-      msg.includes('529') ||
-      msg.includes('overloaded')
-    ) {
+    if (msg.includes('http 400')) {
+      return {
+        type: 'unknown',
+        message: `Bad request: ${raw.slice(0, 200)}`,
+        retryable: false,
+        originalError: error,
+      };
+    }
+
+    if (msg.includes('http 5') || msg.includes('overloaded')) {
       return {
         type: 'server',
-        message: 'Server is temporarily busy. Retrying...',
+        message: "Claude's servers are busy. Retrying...",
         retryable: true,
-        retryAfterMs: 3000,
-        originalError: error,
-      };
-    }
-
-    // Timeout
-    if (msg.includes('timeout') || msg.includes('timed out')) {
-      return {
-        type: 'timeout',
-        message: 'Request timed out. Try a shorter question or check your connection.',
-        retryable: true,
-        retryAfterMs: 2000,
+        retryAfterMs: 5000,
         originalError: error,
       };
     }
   }
 
-  // Unknown
   return {
     type: 'unknown',
-    message: 'Something went wrong. Try again.',
+    message: `Unexpected error: ${raw.slice(0, 200)}`,
     retryable: true,
     retryAfterMs: 2000,
     originalError: error instanceof Error ? error : new Error(String(error)),
   };
 }
 
-/**
- * Sleep helper for retry delays.
- */
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-// ─── Claude Client Class ───────────────────────────────────
+// ─── Claude Client ─────────────────────────────────────────
 
 class ClaudeClient {
-  private client: Anthropic | null = null;
+  private _apiKey: string | null = null;
   private _isInitialized = false;
-
-  // Token usage tracking for the current session
   private _sessionInputTokens = 0;
   private _sessionOutputTokens = 0;
   private _sessionRequestCount = 0;
 
-  /**
-   * Initialize the client with an API key.
-   * Call this once on app start (after onboarding sets the key).
-   *
-   * @param apiKey - Optional override. If not provided, reads from MMKV.
-   * @throws Error if no API key is available.
-   */
   initialize(apiKey?: string): void {
     const key = apiKey || getApiKey();
     if (!key) {
-      throw new Error(
-        'No API key available. Set one in Settings or pass it to initialize().',
-      );
+      console.error('[ClaudeClient] No API key provided');
+      return;
     }
-
-    this.client = new Anthropic({
-      apiKey: key,
-      // React Native doesn't use Node.js http, so the SDK will use fetch.
-      // No additional configuration needed for RN.
-    });
-
+    this._apiKey = key;
     this._isInitialized = true;
     console.log('[ClaudeClient] Initialized successfully');
   }
 
-  /**
-   * Check if the client is ready to make requests.
-   */
   get isInitialized(): boolean {
-    return this._isInitialized && this.client !== null;
+    return this._isInitialized && !!this._apiKey;
   }
 
-  /**
-   * Get session token usage stats.
-   */
   get sessionStats() {
     return {
       inputTokens: this._sessionInputTokens,
@@ -206,56 +135,107 @@ class ClaudeClient {
     };
   }
 
-  /**
-   * Ensure client is initialized before making requests.
-   */
-  private ensureInitialized(): Anthropic {
-    if (!this.client || !this._isInitialized) {
-      // Try auto-initializing from stored key
+  private ensureInitialized(): string {
+    if (!this._apiKey || !this._isInitialized) {
       const key = getApiKey();
       if (key) {
         this.initialize(key);
-        return this.client!;
+        return key;
       }
       throw new Error('Claude client not initialized. Call initialize() first.');
     }
-    return this.client;
+    return this._apiKey;
   }
 
-  // ─── Streaming Response ────────────────────────────────
+  // ─── Core API Call (non-streaming, RN-safe) ─────────────
 
-  /**
-   * Send a message and receive the response as a stream.
-   * This is the preferred method for the UI — shows words as they arrive.
-   *
-   * @param userMessage - The user's input text (from voice or keyboard)
-   * @param options - Request configuration overrides
-   * @yields StreamChunk objects with incremental and accumulated text
-   *
-   * @example
-   * ```ts
-   * for await (const chunk of claudeClient.stream('Turn on flashlight', {
-   *   inputMethod: 'voice'
-   * })) {
-   *   setResponseText(chunk.accumulated);
-   *   if (chunk.isComplete) {
-   *     parseActionsFromResponse(chunk.accumulated);
-   *   }
-   * }
-   * ```
-   */
+  private async callAPI(
+    messages: Message[],
+    systemPrompt: string,
+    model: ClaudeModel,
+    maxTokens: number,
+    temperature: number,
+    abortSignal?: AbortSignal,
+  ): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
+    const apiKey = this.ensureInitialized();
+
+    const body = {
+      model,
+      max_tokens: maxTokens,
+      temperature,
+      system: systemPrompt,
+      messages,
+    };
+
+    console.log('[ClaudeClient] Calling API:', {
+      model,
+      max_tokens: maxTokens,
+      messageCount: messages.length,
+      url: ANTHROPIC_API_URL,
+    });
+
+    const response = await fetch(ANTHROPIC_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': ANTHROPIC_VERSION,
+      },
+      body: JSON.stringify(body),
+      signal: abortSignal,
+    });
+
+    const responseText = await response.text();
+
+    if (!response.ok) {
+      console.error('[ClaudeClient] API error:', response.status, responseText.slice(0, 500));
+      throw new Error(`HTTP ${response.status}: ${responseText}`);
+    }
+
+    let data: any;
+    try {
+      data = JSON.parse(responseText);
+    } catch {
+      console.error('[ClaudeClient] Invalid JSON response:', responseText.slice(0, 500));
+      throw new Error('Invalid JSON from Anthropic API');
+    }
+
+    const text = (data.content || [])
+      .filter((block: any) => block.type === 'text')
+      .map((block: any) => block.text)
+      .join('');
+
+    const inputTokens = data.usage?.input_tokens || 0;
+    const outputTokens = data.usage?.output_tokens || 0;
+
+    this._sessionInputTokens += inputTokens;
+    this._sessionOutputTokens += outputTokens;
+    this._sessionRequestCount += 1;
+
+    console.log('[ClaudeClient] Response received:', {
+      textLength: text.length,
+      inputTokens,
+      outputTokens,
+      stopReason: data.stop_reason,
+    });
+
+    return { text, inputTokens, outputTokens };
+  }
+
+  // ─── Stream (simulated via non-streaming API) ───────────
+  // Yields the full response as a single chunk.
+  // The useStreamingResponse hook handles display — this keeps
+  // the same AsyncGenerator interface so nothing else needs to change.
+
   async *stream(
     userMessage: string,
     options: AIRequestOptions = {},
   ): AsyncGenerator<StreamChunk, void, unknown> {
-    const client = this.ensureInitialized();
-
     const model = options.model || (getModel() as ClaudeModel);
     const maxTokens = options.maxTokens || getMaxTokens();
     const temperature = options.temperature ?? getTemperature();
     const inputMethod = options.inputMethod || 'text';
 
-    // Build messages array with conversation history
     const messages: Message[] = [];
     if (options.conversationHistory) {
       messages.push(...options.conversationHistory);
@@ -267,100 +247,62 @@ class ClaudeClient {
     let retries = 0;
     while (retries <= MAX_RETRIES) {
       try {
-        const stream = client.messages.stream({
-          model,
-          max_tokens: maxTokens,
-          temperature,
-          system: systemPrompt,
+        const result = await this.callAPI(
           messages,
-        });
+          systemPrompt,
+          model,
+          maxTokens,
+          temperature,
+          options.abortSignal,
+        );
 
-        let accumulated = '';
+        if (options.abortSignal?.aborted) return;
 
-        // The SDK's stream helper emits 'text' events for each chunk
-        for await (const event of stream) {
-          if (options.abortSignal?.aborted) {
-            stream.controller.abort();
-            return;
-          }
+        // Yield the full text, then a completion marker
+        yield {
+          text: result.text,
+          isComplete: false,
+          accumulated: result.text,
+        };
 
-          if (
-            event.type === 'content_block_delta' &&
-            event.delta.type === 'text_delta'
-          ) {
-            const text = event.delta.text;
-            accumulated += text;
-
-            yield {
-              text,
-              isComplete: false,
-              accumulated,
-            };
-          }
-        }
-
-        // Get final message for token usage
-        const finalMessage = await stream.finalMessage();
-
-        this._sessionInputTokens += finalMessage.usage.input_tokens;
-        this._sessionOutputTokens += finalMessage.usage.output_tokens;
-        this._sessionRequestCount++;
-
-        // Yield final complete chunk
         yield {
           text: '',
           isComplete: true,
-          accumulated,
+          accumulated: result.text,
         };
 
-        return; // Success — exit retry loop
+        return;
       } catch (error) {
-        const aiError = classifyError(error);
+        console.error('[ClaudeClient] Raw error:', error);
+        const classified = classifyError(error);
 
-        if (!aiError.retryable || retries >= MAX_RETRIES) {
-          throw aiError;
+        if (!classified.retryable || options.abortSignal?.aborted) {
+          throw classified;
         }
 
-        retries++;
+        retries += 1;
+        if (retries > MAX_RETRIES) {
+          throw classified;
+        }
+
         const delay =
-          aiError.retryAfterMs ||
+          classified.retryAfterMs ||
           BASE_RETRY_DELAY_MS * Math.pow(2, retries - 1);
 
         console.warn(
-          `[ClaudeClient] Retry ${retries}/${MAX_RETRIES} after ${delay}ms: ${aiError.message}`,
+          `[ClaudeClient] Retry ${retries}/${MAX_RETRIES} after ${delay}ms: ${classified.message}`,
         );
-        await sleep(delay);
+        await new Promise<void>(resolve => setTimeout(resolve, delay));
       }
     }
   }
 
-  // ─── Synchronous Response ──────────────────────────────
+  // ─── Convenience: full response at once ──────────────────
 
-  /**
-   * Send a message and receive the complete response at once.
-   * Use for intent classification, background tasks, or when you
-   * don't need streaming.
-   *
-   * @param userMessage - The user's input text
-   * @param options - Request configuration overrides
-   * @returns Complete AIResponse with text, token usage, and timing
-   *
-   * @example
-   * ```ts
-   * const response = await claudeClient.send('What is the weather?', {
-   *   inputMethod: 'voice',
-   *   maxTokens: 512,
-   * });
-   * console.log(response.text);
-   * ```
-   */
   async send(
     userMessage: string,
     options: AIRequestOptions = {},
-  ): Promise<AIResponse> {
-    const client = this.ensureInitialized();
-    const startTime = Date.now();
-
+  ): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
     const model = options.model || (getModel() as ClaudeModel);
     const maxTokens = options.maxTokens || getMaxTokens();
     const temperature = options.temperature ?? getTemperature();
@@ -374,109 +316,25 @@ class ClaudeClient {
 
     const systemPrompt = buildSystemPrompt(inputMethod, options.systemContext);
 
-    let retries = 0;
-    while (retries <= MAX_RETRIES) {
-      try {
-        const response = await client.messages.create({
-          model,
-          max_tokens: maxTokens,
-          temperature,
-          system: systemPrompt,
-          messages,
-        });
-
-        const text = response.content
-          .filter(block => block.type === 'text')
-          .map(block => (block as { type: 'text'; text: string }).text)
-          .join('');
-
-        this._sessionInputTokens += response.usage.input_tokens;
-        this._sessionOutputTokens += response.usage.output_tokens;
-        this._sessionRequestCount++;
-
-        return {
-          text,
-          model,
-          inputTokens: response.usage.input_tokens,
-          outputTokens: response.usage.output_tokens,
-          inputMethod,
-          responseTimeMs: Date.now() - startTime,
-        };
-      } catch (error) {
-        const aiError = classifyError(error);
-
-        if (!aiError.retryable || retries >= MAX_RETRIES) {
-          throw aiError;
-        }
-
-        retries++;
-        const delay =
-          aiError.retryAfterMs ||
-          BASE_RETRY_DELAY_MS * Math.pow(2, retries - 1);
-
-        console.warn(
-          `[ClaudeClient] Retry ${retries}/${MAX_RETRIES} after ${delay}ms: ${aiError.message}`,
-        );
-        await sleep(delay);
-      }
-    }
-
-    // Should never reach here, but TypeScript needs this
-    throw classifyError(new Error('Max retries exceeded'));
+    return this.callAPI(messages, systemPrompt, model, maxTokens, temperature, options.abortSignal);
   }
 
-  // ─── Lightweight Classification ────────────────────────
+  // ─── Lifecycle ──────────────────────────────────────────
 
-  /**
-   * Fast intent classification. Uses a minimal prompt and lower max_tokens
-   * to save cost and latency.
-   *
-   * @param userMessage - The raw user input
-   * @param inputMethod - How the user provided input
-   * @returns Raw JSON string from Claude (parse externally)
-   */
-  async classify(
-    userMessage: string,
-    inputMethod: 'voice' | 'text' = 'text',
-  ): Promise<string> {
-    const { buildClassificationPrompt } = require('./systemPrompt');
-
-    const response = await this.send(userMessage, {
-      model: 'claude-haiku-4-5-20251001', // Use Haiku for fast, cheap classification
-      maxTokens: 512,
-      temperature: 0.1, // Low temp for consistent JSON output
-      systemContext: buildClassificationPrompt(),
-      inputMethod,
-    });
-
-    return response.text;
-  }
-
-  // ─── Lifecycle ─────────────────────────────────────────
-
-  /**
-   * Reset session stats (e.g., on app restart or new conversation).
-   */
   resetSessionStats(): void {
     this._sessionInputTokens = 0;
     this._sessionOutputTokens = 0;
     this._sessionRequestCount = 0;
   }
 
-  /**
-   * Re-initialize with a new API key (e.g., user changed it in settings).
-   */
   updateApiKey(newKey: string): void {
     this._isInitialized = false;
-    this.client = null;
+    this._apiKey = null;
     this.initialize(newKey);
   }
 
-  /**
-   * Tear down the client (e.g., on logout).
-   */
   destroy(): void {
-    this.client = null;
+    this._apiKey = null;
     this._isInitialized = false;
     this.resetSessionStats();
     console.log('[ClaudeClient] Destroyed');
@@ -484,8 +342,6 @@ class ClaudeClient {
 }
 
 // ─── Singleton Export ──────────────────────────────────────
-// One client instance shared across the app.
 
 export const claudeClient = new ClaudeClient();
-
 export default claudeClient;
