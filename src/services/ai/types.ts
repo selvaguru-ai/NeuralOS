@@ -128,6 +128,7 @@ export interface ResponseAction {
   command: string;
   variant: 'primary' | 'success' | 'warning' | 'danger' | 'default';
   icon?: string;
+  params?: Record<string, string>;
 }
 
 /**

@@ -44,6 +44,9 @@ import { UserBubble, AIBubble, AIText, TypingIndicator } from '../components/Mes
 import ResponseCard from '../components/ResponseCard';
 import ActionButton, { ActionButtonRow } from '../components/ActionButton';
 
+// Action executor
+import { executeAction } from '../services/actions';
+
 // Types
 import type { InputMethod, ResponseAction } from '../services/ai/types';
 
@@ -182,6 +185,18 @@ export default function CommandScreen({ onBack }: CommandScreenProps) {
       });
     }
   }, [displayText, isComplete, streamError, actions, cardHeader]);
+
+  // ─── Auto-execute actions with params (notifications, etc) ──
+
+  useEffect(() => {
+    if (isComplete && actions.length > 0) {
+      actions.forEach((action) => {
+        if (action.params) {
+          executeAction(action.command, action.params);
+        }
+      });
+    }
+  }, [isComplete, actions]);
 
   // ─── Update AI message on error ────────────────────────
 

@@ -102,6 +102,7 @@ function parseActions(text: string): ResponseAction[] {
       command: a.command,
       variant: a.variant || 'default',
       icon: a.icon,
+      params: a.params,
     }));
   } catch {
     return [];
