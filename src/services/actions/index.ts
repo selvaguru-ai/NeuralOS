@@ -5,6 +5,7 @@
 // This module interprets the command string and dispatches to the
 // appropriate native service (notifications, etc).
 
+import { Linking } from 'react-native';
 import {
   showNotification,
   scheduleNotification,
@@ -58,6 +59,35 @@ export async function executeAction(
       case 'cancel_notifications': {
         await cancelAllNotifications();
         return { success: true, message: 'All notifications cancelled' };
+      }
+
+      // ─── Email ─────────────────────────────────────
+      case 'send_email':
+      case 'compose_email':
+      case 'email': {
+        const to = params?.to || '';
+        const subject = encodeURIComponent(params?.subject || '');
+        const body = encodeURIComponent(params?.body || '');
+        const url = `mailto:${to}?subject=${subject}&body=${body}`;
+        await Linking.openURL(url);
+        console.log('[ActionExecutor] Opened email compose:', to);
+        return { success: true, message: `Email compose opened for ${to || 'new email'}` };
+      }
+
+      // ─── Phone Call ───────────────────────────────
+      case 'call':
+      case 'phone_call': {
+        const number = params?.number || params?.to || '';
+        await Linking.openURL(`tel:${number}`);
+        return { success: true, message: `Calling ${number}` };
+      }
+
+      // ─── Open URL ─────────────────────────────────
+      case 'open_url':
+      case 'browse': {
+        const link = params?.url || '';
+        if (link) await Linking.openURL(link);
+        return { success: true, message: `Opened ${link}` };
       }
 
       // ─── Unhandled ────────────────────────────────

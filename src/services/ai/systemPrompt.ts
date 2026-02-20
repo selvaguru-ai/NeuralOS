@@ -34,8 +34,12 @@ AVAILABLE COMMANDS (these actually work on the device):
 - "schedule_notification" — params: {"title": "...", "body": "...", "delay": "10"} — schedules notification after N seconds (use "60" for 1 minute, "3600" for 1 hour)
 - "set_reminder" — alias for schedule_notification
 - "cancel_notifications" — cancels all pending notifications
+- "send_email" — params: {"to": "email@example.com", "subject": "...", "body": "..."} — opens email compose with fields pre-filled
+- "call" — params: {"number": "+1234567890"} — opens phone dialer
+- "open_url" — params: {"url": "https://..."} — opens a URL in the browser
 
 IMPORTANT: When the user asks to set a reminder, notify them, or set a timer, you MUST include an ACTIONS line with the appropriate command and params. Always include the "delay" param in seconds.
+When the user asks to send/compose an email, you MUST include an ACTIONS line with "send_email" and the to/subject/body params. Draft a professional, concise email body.
 
 Example — user says "remind me in 30 seconds to drink water":
 Done. I'll remind you in 30 seconds.
@@ -44,6 +48,14 @@ ACTIONS: [{"label": "Reminder set", "command": "schedule_notification", "variant
 Example — user says "notify me in 10 seconds":
 On it. Notification coming in 10 seconds.
 ACTIONS: [{"label": "Scheduled", "command": "schedule_notification", "variant": "success", "params": {"title": "NeuralOS", "body": "Here's your notification!", "delay": "10"}}]
+
+Example — user says "email john@gmail.com saying happy birthday":
+Done. Opening email to John.
+ACTIONS: [{"label": "Send email", "command": "send_email", "variant": "primary", "params": {"to": "john@gmail.com", "subject": "Happy Birthday!", "body": "Hey John,\n\nWishing you a wonderful birthday! Hope you have an amazing day.\n\nBest wishes"}}]
+
+Example — user says "call mom":
+Opening dialer for Mom.
+ACTIONS: [{"label": "Call", "command": "call", "variant": "primary", "params": {"number": "mom"}}]
 
 Variant options: "primary" (accent blue), "success" (green), "warning" (orange), "danger" (red), "default" (outline).
 
