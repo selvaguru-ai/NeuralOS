@@ -186,12 +186,18 @@ export default function CommandScreen({ onBack }: CommandScreenProps) {
     }
   }, [displayText, isComplete, streamError, actions, cardHeader]);
 
-  // ─── Auto-execute actions with params (notifications, etc) ──
+  // ─── Auto-execute safe actions (notifications/reminders only) ──
+
+  const AUTO_EXEC_COMMANDS = new Set([
+    'send_notification', 'notify', 'show_notification',
+    'schedule_notification', 'set_reminder', 'set_timer', 'remind',
+    'cancel_notifications',
+  ]);
 
   useEffect(() => {
     if (isComplete && actions.length > 0) {
       actions.forEach((action) => {
-        if (action.params) {
+        if (action.params && AUTO_EXEC_COMMANDS.has(action.command)) {
           executeAction(action.command, action.params);
         }
       });

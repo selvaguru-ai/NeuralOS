@@ -86,7 +86,10 @@ export async function executeAction(
       case 'open_url':
       case 'browse': {
         const link = params?.url || '';
-        if (link) await Linking.openURL(link);
+        if (!link || !link.startsWith('http')) {
+          return { success: false, message: `Invalid URL: "${link}"` };
+        }
+        await Linking.openURL(link);
         return { success: true, message: `Opened ${link}` };
       }
 

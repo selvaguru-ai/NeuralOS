@@ -27,7 +27,7 @@ export default function LiveTranscript({
     Animated.timing(fadeAnim, {
       toValue: visible ? 1 : 0,
       duration: 200,
-      useNativeDriver: true,
+      useNativeDriver: false, // must match borderColor animation on the same node
     }).start();
   }, [visible, fadeAnim]);
 
