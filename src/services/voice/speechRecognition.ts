@@ -250,32 +250,17 @@ class SpeechRecognition {
    * @throws VoiceError if permission denied or not available
    */
   async start(locale: string = 'en-US'): Promise<void> {
-    // Check permission first
+    // Request permission on first use (Android only; iOS is automatic)
     if (!this._hasPermission) {
       const granted = await this.requestPermission();
+      console.log('[SpeechRecognition] permission result:', granted);
       if (!granted) {
-        const error: VoiceError = {
+        this.setState('error');
+        this._onError?.({
           code: 'permission_denied',
           message: 'Microphone access denied. Enable it in Settings.',
           suggestTyping: true,
-        };
-        this.setState('error');
-        this._onError?.(error);
-        return;
-      }
-    }
-
-    // Check availability
-    if (!this._isAvailable) {
-      await this.checkAvailability();
-      if (!this._isAvailable) {
-        const error: VoiceError = {
-          code: 'not_available',
-          message: 'Voice recognition not available on this device.',
-          suggestTyping: true,
-        };
-        this.setState('error');
-        this._onError?.(error);
+        });
         return;
       }
     }
@@ -285,18 +270,21 @@ class SpeechRecognition {
       await this.stop();
     }
 
+    // Skip the isAvailable() pre-check — it returns false on some Android
+    // devices/emulators even when Voice.start() works fine. Just try to start
+    // and let the error handler deal with a real failure.
     try {
       this._latestPartial = '';
       this.setState('listening');
-
+      console.log('[SpeechRecognition] calling Voice.start() with locale:', locale);
       await Voice.start(locale);
     } catch (error) {
-      console.error('[SpeechRecognition] Failed to start:', error);
+      console.error('[SpeechRecognition] Voice.start() threw:', error);
       this.setState('error');
       this._onError?.({
         code: 'start_failed',
         message: 'Could not start voice recognition. Try again.',
-        suggestTyping: true,
+        suggestTyping: false,
       });
     }
   }

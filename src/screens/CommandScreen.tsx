@@ -119,9 +119,9 @@ export default function CommandScreen({ onBack }: CommandScreenProps) {
       handleSendMessage(transcript, 'voice');
     },
     onError: (err) => {
-      if (err.suggestTyping) {
-        setInputMode('text');
-      }
+      // Log the exact error so we can debug what's going wrong
+      console.warn('[CommandScreen] Voice error:', err.code, err.message);
+      // Never auto-switch to text — let the user see the error and decide
     },
   });
 

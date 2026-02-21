@@ -22,17 +22,10 @@ const App = () => {
 
   useEffect(() => {
     try {
-      const keyExists = hasApiKey();
-      console.log('[App] API key exists in MMKV:', keyExists);
-
-      if (keyExists) {
-        console.log('[App] Using existing key from MMKV');
+      if (hasApiKey()) {
         claudeClient.initialize();
         setIsReady(true);
         console.log('[App] Claude client initialized successfully');
-      } else {
-        console.warn('[App] No API key found. User needs to set one in Settings.');
-        // TODO: Show onboarding screen or settings prompt
       }
     } catch (err) {
       console.error('[App] Init failed:', err);

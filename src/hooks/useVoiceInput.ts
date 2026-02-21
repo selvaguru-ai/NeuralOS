@@ -17,11 +17,10 @@
 //     onFinalResult: (text) => sendToAI(text),
 //   });
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import speechRecognition from '../services/voice/speechRecognition';
 import type { VoiceState, VoiceError } from '../services/voice/speechRecognition';
-import {
-  hapticMicTap,
-} from '../services/voice/voiceFeedback';
+import { hapticMicTap } from '../services/voice/voiceFeedback';
 
 interface UseVoiceInputOptions {
   /** Called with the final transcription when the user finishes speaking */
@@ -32,8 +31,6 @@ interface UseVoiceInputOptions {
   onError?: (error: VoiceError) => void;
   /** Language locale (default: 'en-US') */
   locale?: string;
-  /** Auto-initialize on mount (default: true) */
-  autoInit?: boolean;
 }
 
 interface UseVoiceInputReturn {
@@ -60,35 +57,73 @@ interface UseVoiceInputReturn {
 }
 
 export function useVoiceInput(options: UseVoiceInputOptions = {}): UseVoiceInputReturn {
-  // STUB VERSION - Voice package removed
-  // This provides a non-functional interface so CommandScreen doesn't crash
-  const [voiceState] = useState<VoiceState>('idle');
-  const [transcript] = useState('');
-  const [error] = useState<VoiceError | null>({
-    code: 'not_available',
-    message: 'Voice input not available. Voice package was removed.',
-    suggestTyping: true,
-  });
-  const [isAvailable] = useState(false);
+  const [voiceState, setVoiceState] = useState<VoiceState>('idle');
+  const [transcript, setTranscript] = useState('');
+  const [error, setError] = useState<VoiceError | null>(null);
+  const [isAvailable, setIsAvailable] = useState(false);
+
+  // Keep options in a ref so callbacks don't cause re-renders
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+
+  useEffect(() => {
+    // Check availability on mount
+    speechRecognition.checkAvailability().then(available => {
+      setIsAvailable(available);
+    });
+
+    // Wire up callbacks
+    speechRecognition.onStateChange(state => {
+      setVoiceState(state);
+      if (state === 'idle' || state === 'listening') {
+        setError(null);
+      }
+    });
+
+    speechRecognition.onPartialResult(text => {
+      setTranscript(text);
+      optionsRef.current.onPartialResult?.(text);
+    });
+
+    speechRecognition.onFinalResult(text => {
+      setTranscript(text);
+      optionsRef.current.onFinalResult?.(text);
+    });
+
+    speechRecognition.onError(err => {
+      setError(err);
+      optionsRef.current.onError?.(err);
+    });
+
+    return () => {
+      speechRecognition.removeAllCallbacks();
+    };
+  }, []);
 
   // ─── Actions ───────────────────────────────────────────
 
   const startListening = useCallback(async () => {
     hapticMicTap();
-    // Voice package removed - no action
-    console.log('[useVoiceInput] Voice package not available');
+    setTranscript('');
+    setError(null);
+    await speechRecognition.start(optionsRef.current.locale ?? 'en-US');
   }, []);
 
   const stopListening = useCallback(async () => {
-    // Voice package removed - no action
+    await speechRecognition.stop();
   }, []);
 
   const cancelListening = useCallback(async () => {
-    // Voice package removed - no action
+    setTranscript('');
+    await speechRecognition.cancel();
   }, []);
 
   const toggleListening = useCallback(async () => {
-    await startListening();
+    if (speechRecognition.isListening) {
+      await speechRecognition.stop();
+    } else {
+      await startListening();
+    }
   }, [startListening]);
 
   // ─── Return ────────────────────────────────────────────
